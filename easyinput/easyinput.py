@@ -1,22 +1,34 @@
 import configparser
 import os
+import subprocess
 import sys
 
 import pyperclip
 from PyQt5 import QtCore
-from PyQt5.QtWidgets import QApplication, QColorDialog, QMainWindow
+from PyQt5 import QtWidgets
 from Xlib.display import Display
+
+from pyqtkeybind import keybinder
 
 from config import *
 from ui import *
 
 
-class easyInput:
+class WinEventFilter(QtCore.QAbstractNativeEventFilter):
+    def __init__(self, keybinder):
+        self.keybinder = keybinder
+        super().__init__()
+
+    def nativeEventFilter(self, eventType, message):
+        ret = self.keybinder.handler(eventType, message)
+        return ret, 0
+
+class EasyInput:
     _display = Display(os.environ['DISPLAY'])
 
     def __init__(self):
-        self.app = QApplication(sys.argv)
-        self.mainWindow = QMainWindow()
+        self.app = QtWidgets.QApplication(sys.argv)
+        self.mainWindow = QtWidgets.QMainWindow()
         self.ui = Ui_mainWindow()
         self.ui.setupUi(self.mainWindow)
         self.mainWindow.setWindowTitle("方便输入")
@@ -44,7 +56,7 @@ class easyInput:
         self.windowOpacity = self.ui2.windowOpacity.value()
         self.font_color = self.ui2.font_color.text()
         self.background = self.ui2.background.text()
-        self._lodeconfig()
+        self._loadconfig()
 
     def save(self):
         ''' 点击设置中的保存键后
@@ -67,16 +79,16 @@ class easyInput:
 
     def close_back(self):
         self._getconfig()
-        self._lodeconfig()
+        self._loadconfig()
         self.Dialog.close()
 
     def ch_backcolor(self):
-        col = QColorDialog.getColor()
+        col = QtWidgets.QColorDialog.getColor()
         if col.isValid():
             self.ui2.background.setText(col.name())
 
     def ch_font_color(self):
-        col = QColorDialog.getColor()
+        col = QtWidgets.QColorDialog.getColor()
         if col.isValid():
             self.ui2.font_color.setText(col.name())
 
@@ -136,7 +148,7 @@ class easyInput:
         self.config.set("info", "font_color", self.font_color)
         self.config.write(open(".easy_input_rc", "w"))
 
-    def _lodeconfig(self):
+    def _loadconfig(self):
         '''根据配置文件重新设置界面'''
         self.mainWindow.resize(self.windowW, self.windowH)
         self.mainWindow.setMinimumSize(
@@ -157,9 +169,10 @@ class easyInput:
             "background:{};color:{};".format(self.background, self.font_color))
         self.ui2.ch_font_color.setStyleSheet("background:{}".format(self.font_color))
         self.ui2.ch_backcolor.setStyleSheet("background:{};".format(self.background))
+
     def run(self):
         '''运行并显示窗口'''
-        self.mainWindow.move(*self._position())
+        self.mainWindow.move(*self._position)
         # 输入结束信号连接run槽
         self.ui.lineEdit.editingFinished.connect(self.call_action)
         # 重写keyPressEvent
@@ -170,15 +183,36 @@ class easyInput:
             QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint)
 
         self._getconfig()
-        self._lodeconfig()
+        self._loadconfig()
         self._writeconfig()
-        self.mainWindow.show()
-        sys.exit(self.app.exec_())
 
-    @classmethod
-    def _position(cls):
+        pyperclip.determine_clipboard()
+        keybinder.init()
+        keybinder.register_hotkey(self.mainWindow.winId(), "Shift+Ctrl+A", self.callback)
+        keybinder.register_hotkey(self.mainWindow.winId(), "Shift+Ctrl+E", self.mainWindow.close)
+
+        win_event_filter = WinEventFilter(keybinder)
+        event_dispatcher = QtCore.QAbstractEventDispatcher.instance()
+        event_dispatcher.installNativeEventFilter(win_event_filter)
+
+        sys.exit(self.app.exec_())
+        keybinder.unregister_hotkey(self.mainWindow.winId(), "Shift+Ctrl+A")
+        keybinder.unregister_hotkey(self.mainWindow.winId(), "Shift+Ctrl+F" )
+
+    def callback(self):
+        self.mainWindow.move(*self._position)
+        pos = self.mainWindow.pos()
+        self.mainWindow.show()
+        timer = QtCore.QTimer(self.mainWindow)
+        def focus():
+            subprocess.call(['xdotool', 'mousemove', str(pos.x() + 2), str(pos.y() + 2)])
+            subprocess.call(['xdotool', 'click', '1'])
+        timer.singleShot(150, focus)
+
+    @property
+    def _position(self):
         '''获取鼠标的绝对位置'''
-        pos_info = cls._display.screen().root.query_pointer()._data
+        pos_info = self._display.screen().root.query_pointer()._data
         return pos_info['root_x'], pos_info['root_y']
 
     def call_action(self):
@@ -191,10 +225,11 @@ class easyInput:
             self.ui.lineEdit.mouseDoubleClickEvent = None
             self.tmpText = self.ui.lineEdit.text()
             self.ui.lineEdit.setText(self.test_text)
-        else:
+        elif self.ui.lineEdit.hasFocus():
             text = self.ui.lineEdit.text()
             self.write_paste(text)
-            self.app.exit()
+            self.ui.lineEdit.clear()
+            self.mainWindow.hide()
 
     def keypressevent(self, fun):
         def warr(event):
@@ -204,14 +239,16 @@ class easyInput:
                 fun(event)
         return warr
 
-    @staticmethod
-    def write_paste(text):
+    def write_paste(self, text):
         pyperclip.copy(text)
-        print("假设我已经写入到了剪切板")
+        timer = QtCore.QTimer(self.mainWindow)
+        def paste():
+            subprocess.call(['xdotool', 'key', 'Ctrl+v'])
+        timer.singleShot(150, paste)
 
 
 def main():
-    window = easyInput()
+    window = EasyInput()
     window.run()
 
 
